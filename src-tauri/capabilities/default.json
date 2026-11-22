@@ -1,0 +1,1 @@
+{"identifier":"desktop","description":"Local main and drop windows only","windows":["main","drop"],"permissions":["core:default","core:event:default","core:window:allow-start-dragging"]}

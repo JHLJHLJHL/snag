@@ -1,0 +1,151 @@
+import {chromium} from '@playwright/test';
+import {spawn,execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+import fs from 'node:fs';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import {fixtures} from './fixtures.mjs';
+
+const root=path.resolve('.test-artifacts'),data=path.join(root,`app-${Date.now()}`);fs.mkdirSync(data,{recursive:true});
+fs.writeFileSync(path.join(data,'queue.json'),JSON.stringify({version:1,items:[],settings:{container:'original',directory:path.join(data,'저장한 영상')}}));
+const executable=path.resolve(process.env.STREAMDROP_BINARY||'src-tauri/target/debug/snag.exe');
+const fixture=await fixtures();
+const {createServer}=await import('node:net');const probe=createServer();await new Promise(r=>probe.listen(0,'127.0.0.1',r));const debugPort=probe.address().port;await new Promise(r=>probe.close(r));
+const appEnv={...process.env,STREAMDROP_DATA_DIR:data,...(process.env.STREAMDROP_BUNDLED_TEST?{}:{STREAMDROP_ENGINE_DIR:path.resolve('engine')}),WEBVIEW2_USER_DATA_FOLDER:path.join(data,'webview'),WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:`--remote-debugging-port=${debugPort}`};
+let app=spawn(executable,[],{env:appEnv,stdio:['ignore','pipe','pipe'],windowsHide:true});
+let output='';app.stdout.on('data',b=>output+=b);app.stderr.on('data',b=>output+=b);
+let browser,page;
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function waitFor(fn,label,timeout=30000){const start=Date.now();while(Date.now()-start<timeout){const result=await fn();if(result)return result;await sleep(200);}throw new Error(`Timed out: ${label}\n${output.slice(-1500)}`);}
+async function call(action,payload={}){return page.evaluate(({action,payload})=>window.__TAURI_INTERNALS__.invoke('command',{action,payload}),{action,payload});}
+async function native(message){
+  const child=spawn(executable,['--native-host'],{env:{...process.env,STREAMDROP_DATA_DIR:data},stdio:['pipe','pipe','pipe'],windowsHide:true});
+  const json=Buffer.from(JSON.stringify(message)),size=Buffer.alloc(4);size.writeUInt32LE(json.length);child.stdin.end(Buffer.concat([size,json]));
+  const chunks=[];child.stdout.on('data',b=>chunks.push(b));await new Promise((resolve,reject)=>{child.on('error',reject);child.on('exit',resolve);});
+  const result=Buffer.concat(chunks);assert.ok(result.length>=4,'native host returns a framed response');return JSON.parse(result.subarray(4,4+result.readUInt32LE()).toString());
+}
+try{
+  await waitFor(async()=>{try{return(await fetch(`http://127.0.0.1:${debugPort}/json/version`)).ok;}catch{return false;}},'WebView2 CDP',45000);
+  browser=await chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`);
+  page=await waitFor(async()=>browser.contexts().flatMap(c=>c.pages()).find(p=>!p.url().includes('window=drop')),'main window');
+  const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.getByRole('heading',{name:'다운로드 대기열',exact:true}).waitFor();
+  const email=page.getByRole('button',{name:'honeymath.gbe@gmal.com',exact:true});
+  await email.click();
+  await page.getByText('복사했습니다.',{exact:true}).waitFor();
+  const {stdout:copied}=await promisify(execFile)('powershell.exe',['-NoProfile','-Command','Get-Clipboard'],{windowsHide:true,encoding:'utf8'});
+  assert.equal(copied.trim(),'honeymath.gbe@gmal.com');
+  await page.screenshot({path:path.join(root,'desktop-signature-copy.png')});
+  await page.getByText('복사했습니다.',{exact:true}).waitFor({state:'hidden',timeout:4000});
+  const signature=await email.evaluate(node=>({inset:node.getBoundingClientRect().left-node.closest('.astryx-side-nav').getBoundingClientRect().left,font:getComputedStyle(node.querySelector('.astryx-text')).fontSize}));
+  assert.ok(signature.inset<=12);assert.equal(signature.font,'12px');
+  await page.getByRole('link',{name:'https://jhljhljhl.github.io/release',exact:true}).click();
+  await page.getByRole('heading',{name:'다운로드 대기열',exact:true}).waitFor();
+  assert.ok(!page.url().includes('github.io'),'release link leaves the app in place');
+  assert.equal(await page.getByRole('alert').count(),0);
+  await page.screenshot({path:path.join(root,'desktop-empty.png')});
+  assert.equal((await call('status')).engineReady,true);
+  if(process.env.STREAMDROP_BUNDLED_TEST)assert.equal(path.resolve((await call('status')).extensionPath),path.join(path.dirname(executable),'extension'));
+  // Real native frames and authenticated loopback server, without modifying Chrome registration.
+  const status=await native({action:'status'});assert.equal(status.ok,true);
+  const config=JSON.parse(fs.readFileSync(path.join(data,'bridge.json')));
+  const denied=await fetch(`http://127.0.0.1:${config.port}/bridge`,{method:'POST',body:'{}'});assert.equal(denied.status,403);
+  const webOrigin=await fetch(`http://127.0.0.1:${config.port}/bridge`,{method:'POST',headers:{Authorization:`Bearer ${config.token}`,Origin:'https://example.com'},body:'{}'});assert.equal(webOrigin.status,403);
+  const first=await native({action:'enqueue',data:{url:`${fixture.url}/sample.mp4`,title:'네이티브 브리지 테스트'}});assert.equal(first.ok,true);
+  await waitFor(async()=>{const s=await call('snapshot');return s.items[0]?.status==='ready';},'native enqueue analysis');
+  const duplicate=await native({action:'enqueue',data:{url:`${fixture.url}/sample.mp4`}});assert.equal(duplicate.data.duplicate,true);
+  // Paste and drop traverse the renderer's actual event handlers and Tauri command.
+  await page.getByRole('textbox',{name:'영상 주소',exact:true}).fill(`${fixture.url}/master.m3u8`);
+  await page.getByRole('button',{name:'대기열 추가',exact:true}).click();
+  await waitFor(async()=>{const s=await call('snapshot');return s.items.length===2&&s.items.every(i=>i.status==='ready');},'HLS analysis');
+  const s=await call('snapshot');const hls=s.items[1];assert.ok(hls.info.formats.some(f=>f.height===90));
+  // Select a real source format through the rendered quality selector.
+  await page.getByRole('combobox',{name:'영상 포맷',exact:true}).click();
+  await page.getByRole('option').filter({hasText:'90p'}).first().click();
+  await waitFor(async()=>{const state=await call('snapshot');return state.items[1].options.videoFormat!=='auto';},'quality choice persists');
+  await page.screenshot({path:path.join(root,'desktop-queue.png')});
+  await page.getByRole('button',{name:'모두 다운로드',exact:true}).click();
+  await waitFor(async()=>{const state=await call('snapshot');const fail=state.items.find(i=>i.status==='failed');if(fail)throw new Error(fail.error);return state.items.every(i=>i.status==='completed');},'real queued downloads',90000);
+  const completed=await call('snapshot');assert.ok(completed.items.every(i=>fs.existsSync(i.filePath)));
+  await page.getByRole('button',{name:'완료한 다운로드',exact:false}).click();
+  await page.getByRole('button',{name:'저장한 파일 보기',exact:true}).click();
+  const selectedFile=completed.items.find(i=>i.id===hls.id).filePath;
+  await waitFor(async()=>{
+    const {stdout}=await promisify(execFile)('powershell.exe',['-NoProfile','-Command',"[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $shell=New-Object -ComObject Shell.Application; @($shell.Windows() | ForEach-Object { try { $_.Document.SelectedItems() | ForEach-Object { $_.Path } } catch {} }) | ConvertTo-Json -Compress"],{windowsHide:true,encoding:'utf8'});
+    const selected=JSON.parse(stdout.trim()||'[]');
+    return (Array.isArray(selected)?selected:[selected]).some(file=>path.resolve(file).toLowerCase()===path.resolve(selectedFile).toLowerCase());
+  },'Explorer selects the actual saved file',15000);
+  assert.ok(completed.items.every(i=>path.extname(i.filePath)==='.mp4'),'all default video downloads are MP4');
+  await page.screenshot({path:path.join(root,'desktop-completed.png')});
+  // A playlist traverses the real renderer and engine; the completed first video is skipped.
+  await page.getByRole('button',{name:'다운로드 대기열',exact:false}).click();
+  await page.getByRole('textbox',{name:'영상 주소',exact:true}).fill(`${fixture.url}/playlist.html`);
+  await page.getByRole('button',{name:'대기열 추가',exact:true}).click();
+  await page.getByText('Playlist fixture: 1개 영상을 대기열에 추가했습니다 · 중복 1개 제외',{exact:true}).waitFor();
+  await waitFor(async()=>{const state=await call('snapshot');return state.items.length===3&&state.items[2].status==='ready';},'playlist expands, deduplicates and analyzes');
+  assert.equal((await call('snapshot')).items[2].url,`${fixture.url}/small.mp4`);
+  await page.getByRole('button',{name:'모두 다운로드',exact:true}).click();
+  await waitFor(async()=>{const state=await call('snapshot');const fail=state.items.find(i=>i.status==='failed');if(fail)throw new Error(fail.error);return state.items.length===3&&state.items.every(i=>i.status==='completed'&&fs.existsSync(i.filePath));},'playlist downloads all remaining entries',90000);
+  await page.getByRole('button',{name:'완료한 다운로드',exact:false}).click();
+  await page.screenshot({path:path.join(root,'desktop-playlist-completed.png')});
+  await call('settings',{preset:'720'});
+  assert.equal((await call('snapshot')).settings.preset,'720');
+  await page.getByRole('button',{name:'작은 드롭 창',exact:true}).click();
+  const drop=await waitFor(async()=>browser.contexts().flatMap(c=>c.pages()).find(p=>p.url().includes('window=drop')),'drop window');
+  await drop.getByText('영상을 여기에 놓으세요',{exact:true}).waitFor();await drop.screenshot({path:path.join(root,'drop-window.png')});
+  await drop.evaluate(url=>{const transfer=new DataTransfer();transfer.setData('text/plain',url);document.querySelector('[data-astryx-name="VStack"]')?.dispatchEvent(new DragEvent('drop',{dataTransfer:transfer,bubbles:true,cancelable:true}));},`${fixture.url}/small.mp4?drop=1`);
+  // Some component builds omit debug attributes; dispatch to the visible root as fallback.
+  if((await call('snapshot')).items.length===3)await drop.evaluate(url=>{const transfer=new DataTransfer();transfer.setData('text/plain',url);document.querySelector('#root').firstElementChild.querySelector('section,div').dispatchEvent(new DragEvent('drop',{dataTransfer:transfer,bubbles:true,cancelable:true}));},`${fixture.url}/small.mp4?drop=1`);
+  await waitFor(async()=>(await call('snapshot')).items.length===4,'drop window enqueue');
+  await page.getByRole('button',{name:'다운로드 대기열',exact:false}).click();
+  await waitFor(async()=>(await call('snapshot')).items[3].status==='ready','dropped video analysis');
+  const audioItem=(await call('snapshot')).items[3];
+  await page.getByRole('checkbox',{name:`${audioItem.title} 선택`,exact:true}).check();
+  await page.getByRole('button',{name:'음성 다운',exact:true}).click();
+  await waitFor(async()=>(await call('snapshot')).items.find(i=>i.id===audioItem.id).options.mode==='audio','selected audio settings');
+  assert.equal((await call('snapshot')).items.find(i=>i.id===audioItem.id).status,'ready','media button does not start downloading');
+  assert.equal(await page.getByRole('checkbox',{name:`${audioItem.title} 선택`,exact:true}).isChecked(),true);
+  await page.screenshot({path:path.join(root,'desktop-batch-configured.png')});
+  await page.getByRole('button',{name:'선택한 1개 다운로드',exact:true}).click();
+  await waitFor(async()=>{const item=(await call('snapshot')).items.find(i=>i.id===audioItem.id);if(item.status==='failed')throw new Error(item.error);return item.status==='completed';},'selected audio download',60000);
+  const audio=(await call('snapshot')).items.find(i=>i.id===audioItem.id);
+  assert.equal(audio.options.mode,'audio');assert.equal(path.extname(audio.filePath),'.mp3');
+  const probeEngine=process.env.STREAMDROP_BUNDLED_TEST?path.join(path.dirname(executable),'engine'):path.resolve('engine');
+  const {stdout:audioProbe}=await promisify(execFile)(path.join(probeEngine,'ffprobe.exe'),['-v','quiet','-show_streams','-of','json',audio.filePath],{windowsHide:true});
+  const streams=JSON.parse(audioProbe).streams;assert.equal(streams.length,1);assert.equal(streams[0].codec_name,'mp3');
+  const videoAdded=await call('add',`${fixture.url}/sample.mp4?batch=video`);
+  const removeAdded=await call('add',`${fixture.url}/small.mp4?batch=remove`);
+  await waitFor(async()=>{const s=await call('snapshot');return s.items.length===6&&s.items.slice(4).every(i=>i.status==='ready');},'batch queue analysis');
+  const all=page.getByRole('checkbox',{name:'대기열 전체 선택',exact:true});
+  await all.check();await page.getByText('2개 선택',{exact:true}).waitFor();await all.uncheck();
+  const toRemove=(await call('snapshot')).items.find(i=>i.id===removeAdded.id);
+  await page.getByRole('checkbox',{name:`${toRemove.title} 선택`,exact:true}).check();
+  await page.getByRole('button',{name:'제거',exact:true}).click();
+  await waitFor(async()=>{const s=await call('snapshot');return s.items.length===5&&!s.items.some(i=>i.id===removeAdded.id);},'selected queue removal');
+  const toDownload=(await call('snapshot')).items.find(i=>i.id===videoAdded.id);
+  await page.getByRole('checkbox',{name:`${toDownload.title} 선택`,exact:true}).check();
+  await page.getByRole('button',{name:'영상 다운',exact:true}).click();
+  await page.getByText('1개 항목을 영상(MP4)으로 설정했습니다.',{exact:true}).waitFor();
+  assert.equal((await call('snapshot')).items.find(i=>i.id===videoAdded.id).status,'ready','video settings wait for panel download button');
+  await page.getByRole('button',{name:'선택한 1개 다운로드',exact:true}).click();
+  await waitFor(async()=>{const item=(await call('snapshot')).items.find(i=>i.id===videoAdded.id);if(item.status==='failed')throw new Error(item.error);return item.status==='completed';},'selected video download',60000);
+  const finalState=await call('snapshot');
+  const videoResult=finalState.items.find(i=>i.id===videoAdded.id);assert.equal(videoResult.options.mode,'both');assert.equal(path.extname(videoResult.filePath),'.mp4');
+  const {stdout:videoProbe}=await promisify(execFile)(path.join(probeEngine,'ffprobe.exe'),['-v','quiet','-show_streams','-of','json',videoResult.filePath],{windowsHide:true});
+  const videoStreams=JSON.parse(videoProbe).streams;assert.ok(videoStreams.some(s=>s.codec_type==='video'));assert.ok(videoStreams.some(s=>s.codec_type==='audio'));
+  assert.ok(finalState.items.every(i=>fs.existsSync(i.filePath)),'selection removal preserves all completed files');
+  console.log('PASS: media buttons only set options; panel button starts selected MP3/MP4 downloads; select all/clear and queue-only removal');
+  assert.deepEqual(errors,[],'renderer has no uncaught exceptions');
+  console.log('PASS: Tauri UI, native bridge, authentication, MP4/HLS queue, playlist expansion/deduplication/downloads, 90p selection, settings, drop window, completed files');
+  fs.writeFileSync(path.join(root,'smoke-result.json'),JSON.stringify({passed:true,data,completed:finalState.items.map(i=>i.filePath)},null,2));
+  await call('quit').catch(()=>{});await waitFor(()=>app.exitCode!==null,'graceful app exit');
+  await browser.close().catch(()=>{});browser=null;
+  app=spawn(executable,[],{env:appEnv,stdio:'ignore',windowsHide:true});
+  await waitFor(async()=>{try{return(await fetch(`http://127.0.0.1:${debugPort}/json/version`)).ok;}catch{return false;}},'restart WebView2');
+  browser=await chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`);page=await waitFor(async()=>browser.contexts().flatMap(c=>c.pages()).find(p=>!p.url().includes('window=drop')),'restarted main');
+  await page.getByRole('heading',{name:'다운로드 대기열',exact:true}).waitFor();
+  const restored=await call('snapshot');assert.equal(restored.items.length,5);assert.equal(restored.items.filter(i=>i.status==='completed').length,5);assert.equal(restored.settings.preset,'720');
+  console.log('PASS: real process restart preserves titled queue, completion history and defaults');
+  await call('quit').catch(()=>{});await waitFor(()=>app.exitCode!==null,'restarted app exit');
+}catch(error){if(page)await page.screenshot({path:path.join(root,'failure.png')}).catch(()=>{});throw error;}
+finally{if(browser)await browser.close().catch(()=>{});app.kill();await fixture.close();}

@@ -1,0 +1,36 @@
+{
+  "name": "snag",
+  "productName": "snag",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "크롬에서 발견한 영상을 로컬 다운로드 큐로",
+  "scripts": {
+    "dev": "node scripts/rust.mjs tauri dev",
+    "dev:web": "vite --host 127.0.0.1 --port 1420 --strictPort",
+    "build": "vite build",
+    "start": "node scripts/start.mjs",
+    "test": "node scripts/rust.mjs test --no-default-features",
+    "test:e2e": "node scripts/smoke.mjs",
+    "test:motion": "playwright test --config playwright.motion.config.mjs",
+    "test:engine": "node scripts/engine-smoke.mjs",
+    "setup:engine": "node scripts/setup-engine.mjs",
+    "package": "node scripts/package.mjs",
+    "test:extension": "node scripts/extension-smoke.mjs"
+  },
+  "dependencies": {
+    "@astryxdesign/core": "^0.7.16",
+    "@astryxdesign/theme-neutral": "^0.7.16",
+    "@heroicons/react": "^2.2.0",
+    "@tauri-apps/api": "^2.12.5",
+    "fflate": "^0.8.3",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@astryxdesign/cli": "^0.7.16",
+    "@playwright/test": "^1.65.1",
+    "@tauri-apps/cli": "^2.12.6",
+    "vite": "^8.3.8"
+  }
+}

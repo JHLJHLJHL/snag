@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "snag",
+  "version": "0.1.0",
+  "description": "공개 영상을 찾아 로컬 다운로드 큐에 추가합니다.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1N/hk8XnYH040gTHbbxqEeZxke23VBawWjtVun1w59OvY/bMPHARQdYplVoZamLd79JWQmzs8KVq5YjpztuS8t9KM8fLnWynNVD9NGhCkTLEv79lWQcHVTqi3BGdcelvWdo1y2GThj+aUvqZ/06diXOYYoR1rWgGfIDKJphgNazCOfH4TQgl10/v0jrZMES/0tViLNuaOOK3dM0jkSgW9Xz2oSVckLDZCIhhudKPeHnNkglG3JXAcylJ8t9yM/ug7Aj9v0U74UPmbwUWe6qCmH/2M07atwESgDLRZv3A+Nim/dzIrdAAIBbntGhmcbJymu17iSCQIPABe8vb2jwMNwIDAQAB",
+  "permissions": [
+    "nativeMessaging",
+    "contextMenus",
+    "webRequest",
+    "tabs",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "snag",
+    "default_icon": "icon.png"
+  },
+  "icons": {
+    "128": "icon.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ]
+}
