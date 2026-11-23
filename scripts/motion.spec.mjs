@@ -216,20 +216,64 @@ test('accepts playlist links and shows expansion summary while preserving queue 
   await expect.poll(()=>page.evaluate(()=>window.__motionCalls.some(call=>call.action==='startAll'))).toBe(true);
 });
 
-test('shows actual stages and waits for backend completion after 100%',async({page})=>{
+test('notifications leave controls and scrolled list in place on show, replacement and dismissal',async({page})=>{
   await page.goto('/');
-  const steps=page.getByRole('list',{name:'다운로드 단계',exact:true});
-  await expect(steps).toBeVisible();
+  await page.evaluate(()=>{const item=window.__getQueue().items[0];window.__setQueue(Array.from({length:25},(_,n)=>({...item,id:String(n),title:`영상 ${n}`})));});
+  const list=page.locator('[data-region="download-list"]');
+  await expect(page.getByText('영상 24',{exact:true})).toHaveCount(1);
+  await list.evaluate(node=>node.scrollTop=250);
+  const input=page.getByRole('textbox',{name:'영상 주소',exact:true});
+  const controls=page.locator('[data-region="queue-selection"]');
+  const before={input:await input.boundingBox(),controls:await controls.boundingBox(),list:await list.boundingBox(),scroll:await list.evaluate(node=>node.scrollTop)};
+  const stable=async()=>{
+    expect(await input.boundingBox()).toEqual(before.input);
+    expect(await controls.boundingBox()).toEqual(before.controls);
+    expect(await list.boundingBox()).toEqual(before.list);
+    expect(await list.evaluate(node=>node.scrollTop)).toBe(before.scroll);
+  };
+  const emit=title=>page.evaluate(title=>window.__emitPlaylist({title,added:2,duplicates:0,skipped:0}),title);
+  const notice=page.locator('[data-notification="banner"]');
+  await emit('재생목록');
+  await expect(notice).toBeVisible();
+  await stable();
+  await emit('아주 긴 재생목록 제목 '.repeat(30));
+  await expect(notice).toContainText('아주 긴 재생목록 제목');
+  const box=await notice.boundingBox();
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x+box.width).toBeLessThanOrEqual(page.viewportSize().width);
+  await stable();
+  await page.getByRole('button',{name:'알림 닫기',exact:true}).click();
+  await expect(notice).toBeHidden();await stable();
+  await page.evaluate(()=>{window.__clipboardError=true;});
+  await page.getByRole('button',{name:'honeymath.gbe@gmal.com',exact:true}).click();
+  await expect(notice).toHaveAttribute('role','alert');await stable();
+  await page.getByRole('button',{name:'알림 닫기',exact:true}).click();
+  await emit('자동 닫힘');
+  await expect(notice).toBeVisible();
+  await expect(notice).toBeHidden({timeout:7000});await stable();
+  await emit('화면 알림');
+  await expect(notice).toBeVisible();
+  await page.screenshot({path:'.test-artifacts/notification-overlay.png'});
+});
+
+test('settings panel omits status and stages while list waits for backend completion after 100%',async({page})=>{
+  await page.goto('/');
+  const panel=page.getByRole('complementary');
+  await expect(panel.getByRole('heading',{name:'다운로드 설정',exact:true})).toBeVisible();
+  await expect(panel.locator('[data-motion="job-status"], [data-motion="steps"]')).toHaveCount(0);
+  await expect(panel.getByRole('progressbar')).toHaveCount(0);
   await status(page,'downloading',100);
   await expect(page.locator('[data-motion="job-status"]').first()).toHaveAttribute('data-state','downloading');
+  await expect(panel.locator('[data-motion="job-status"], [data-motion="steps"]')).toHaveCount(0);
+  await expect(page.locator('[data-region="download-list"]').getByRole('progressbar')).toBeVisible();
   await status(page,'processing',100);
   await expect(page.getByText('병합·변환 중',{exact:true}).first()).toBeVisible();
-  await expect(steps.locator('.astryx-step[data-progress="completed"]')).toHaveCount(2);
+  await expect(panel.locator('[data-motion="job-status"], [data-motion="steps"]')).toHaveCount(0);
   await expect(page.locator('[data-motion="job-status"]').first()).toHaveAttribute('data-state','processing');
   await status(page,'completed',100);
   await page.getByRole('button',{name:'완료한 다운로드',exact:false}).click();
   await expect(page.locator('[data-motion="job-status"]').first()).toHaveAttribute('data-state','completed');
-  await expect(steps.locator('.astryx-step[data-progress="completed"]')).toHaveCount(4);
+  await expect(panel.locator('[data-motion="job-status"], [data-motion="steps"]')).toHaveCount(0);
   await expect.poll(()=>page.locator('[data-motion="job-status"]').first().evaluate(el=>el.getAnimations().filter(a=>a.playState==='running').length)).toBe(0);
   await page.screenshot({path:'.test-artifacts/motion-completed.png'});
 });
@@ -416,18 +460,16 @@ test('small window morphs from idle to progress and a fresh completion without o
   })).toBe(true);
 });
 
-test('a retry failing in analysis does not reuse the previous 100% processing phase',async({page})=>{
+test('retry failures show in the list without adding progress to settings',async({page})=>{
   await page.goto('/');
-  const steps=page.getByRole('list',{name:'다운로드 단계',exact:true});
-  await expect(steps).toBeVisible();
   await status(page,'processing',100);
   await status(page,'failed',100);
   await page.getByRole('button',{name:'실패 · 취소',exact:false}).click();
   await page.getByRole('button',{name:'다시 시도',exact:true}).click();
-  await expect(steps).toHaveCount(0);
+  await expect(page.locator('[data-region="download-list"] [data-motion="job-status"]')).toHaveCount(0);
   await status(page,'failed',100);
-  await expect(steps.locator('.astryx-step[data-progress="completed"]')).toHaveCount(0);
-  await expect(steps.locator('.astryx-step').first()).toHaveAttribute('data-status','error');
+  await expect(page.locator('[data-region="download-list"] [data-motion="job-status"]')).toHaveAttribute('data-state','failed');
+  await expect(page.getByRole('complementary').locator('[data-motion="job-status"], [data-motion="steps"]')).toHaveCount(0);
 });
 
 test('reduced motion keeps feedback and small desktop controls fit',async({page})=>{
@@ -435,8 +477,7 @@ test('reduced motion keeps feedback and small desktop controls fit',async({page}
   await page.setViewportSize({width:900,height:620});
   await page.goto('/');
   await status(page,'processing',100);
-  const steps=page.getByRole('list',{name:'다운로드 단계',exact:true});
-  await expect(steps).toBeVisible();
+  await expect(page.locator('[data-region="download-list"] [data-motion="job-status"]')).toHaveAttribute('data-state','processing');
   await status(page,'failed',50);
   await page.getByRole('button',{name:'실패 · 취소',exact:false}).click();
   await expect(page.locator('[data-motion="job-status"]').first()).toHaveAttribute('data-state','failed');

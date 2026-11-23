@@ -5,7 +5,6 @@ import {Button} from '@astryxdesign/core/Button';
 import {Icon} from '@astryxdesign/core/Icon';
 import {Spinner} from '@astryxdesign/core/Spinner';
 import {ProgressBar} from '@astryxdesign/core/ProgressBar';
-import {Stepper,Step} from '@astryxdesign/core/Stepper';
 import {SegmentedControl,SegmentedControlItem} from '@astryxdesign/core/SegmentedControl';
 import {ArrowDownTrayIcon,ClipboardDocumentIcon,LinkIcon,PauseIcon,XMarkIcon,ExclamationCircleIcon} from '@heroicons/react/24/outline';
 
@@ -147,29 +146,6 @@ export function MediaSegments({options,onChange,disabled}){return <VStack gap={2
     <SegmentedControlItem value="audio" label="음성"/>
   </SegmentedControl>
 </VStack>;}
-
-export function downloadStage(item){
-  if(item.status==='completed')return 4;
-  if(item.status==='processing')return 2;
-  if(item.status==='analyzing')return 0;
-  if(['ready','queued','downloading'].includes(item.status))return 1;
-  if(item.progress?.percent>=100)return 2;
-  return item.info?1:0;
-}
-
-export function DownloadSteps({item,history}){
-  const interrupted=['failed','cancelled','paused'].includes(item.status);
-  const current=interrupted?(history.get(item.id)??downloadStage(item)):downloadStage(item);
-  return <VStack data-motion="steps" gap={2}>
-    <Stack width="calc(100% + 2 * var(--spacing-5))" style={{alignSelf:'center'}}>
-    <Stepper label="다운로드 단계" activeStep={current} indicatorPosition="on-track" density="compact" horizontalOptions={{minimumStepWidth:60,collapsedVariant:'withLabel'}}>
-      {['분석','다운로드','병합·변환','완료'].map((label,index)=><Step key={label} step={index} label={label} status={interrupted&&index===current?(item.status==='failed'?'error':'warning'):undefined}/>) }
-    </Stepper>
-    </Stack>
-    {item.status==='processing'&&<Text type="supporting">다운로드를 마쳤어요. 파일을 병합·변환하고 있습니다.</Text>}
-    {interrupted&&<Text type="supporting">{jobLabels[item.status]} · {item.status==='paused'?'다시 시작하면 이어서 진행합니다.':item.status==='failed'?'오류를 확인하고 다시 시도해 주세요.':'다시 시도하면 작업을 시작합니다.'}</Text>}
-  </VStack>;
-}
 
 export function DownloadProgress({item}){return <ProgressBar label={`${item.title} 다운로드 진행률`} isLabelHidden value={Math.max(0,Math.min(100,Number(item.progress?.percent)||0))} isIndeterminate={item.status==='processing'}/>;}
 
