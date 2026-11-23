@@ -62,14 +62,6 @@ fn mp3_quality_is_validated_persisted_and_used_by_the_encoder() {
     let restored = store.load().unwrap();
     assert_eq!(serde_json::to_value(restored.settings.options).unwrap()["audioQuality"], "256");
     assert_eq!(serde_json::to_value(&restored.items[0].options).unwrap()["audioQuality"], "192");
-    let output = |item| {
-        let args = download_args(&item, std::path::Path::new("D:/audio")).unwrap();
-        args[args.iter().position(|arg| arg == "--output").unwrap() + 1].clone()
-    };
-    let first = make("128", "mp3");
-    let mut changed = make("320", "mp3");
-    changed.id = first.id.clone();
-    assert_ne!(output(first), output(changed));
 }
 #[test]
 #[cfg(windows)]
@@ -81,22 +73,4 @@ fn windows_certificate_store_is_used_without_disabling_verification() {
         assert!(args.windows(2).any(|pair| pair == ["--compat-options", "no-certifi"]));
         assert!(!args.iter().any(|arg| arg.starts_with("--no-check-certificate") || arg == "--prefer-insecure"));
     }
-}
-#[test]
-fn output_names_isolate_jobs_modes_and_changed_quality_for_safe_resume() {
-    use streamdrop_core::{engine::download_args, model::*};
-    let input = Input::parse(json!("https://a.test/v")).unwrap();
-    let item = Item::new(input.clone(), Options::default());
-    let output = |i: &Item| {
-        let args = download_args(i, std::path::Path::new("D:/video")).unwrap();
-        args[args.iter().position(|a| a == "--output").unwrap() + 1].clone()
-    };
-    let original = output(&item);
-    let mut changed = item.clone();
-    changed.options.mode = "video".into();
-    assert_ne!(original, output(&changed));
-    changed = item.clone();
-    changed.options.preset = "720".into();
-    assert_ne!(original, output(&changed));
-    assert_ne!(original, output(&Item::new(input, Options::default())));
 }

@@ -8,6 +8,40 @@ use tokio::sync::watch;
 
 #[tokio::test]
 #[ignore = "requires the local fixture server; run npm run test:engine"]
+async fn audio_downloads_embed_the_thumbnail_as_album_art() {
+    let base = std::env::var("STREAMDROP_FIXTURE_URL").unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let engine = Engine {
+        directory: PathBuf::from(std::env::var("STREAMDROP_ENGINE_DIR").unwrap()),
+    };
+    let (_sender, cancel) = watch::channel(false);
+    let input = Input::parse(json!(format!("{base}/cover.html"))).unwrap();
+    let info = engine.analyze(input.clone(), cancel.clone()).await.unwrap();
+    assert!(info.thumbnail.is_some(), "fixture must supply a thumbnail");
+    for (mode, container) in [("audio", "mp3"), ("audio", "original"), ("both", "mp4")] {
+        let mut item = Item::new(input.clone(), Options {
+            mode: mode.into(), container: container.into(), ..Default::default()
+        });
+        item.info = Some(info.clone());
+        let directory = output.path().join(format!("{mode}-{container}"));
+        let file = engine.download(item, directory.clone(), cancel.clone(), Arc::new(|_, _| {})).await.unwrap();
+        let probe = std::process::Command::new(engine.directory.join("ffprobe.exe"))
+            .args(["-v", "quiet", "-show_streams", "-of", "json", &file]).output().unwrap();
+        assert!(probe.status.success());
+        let result: Value = serde_json::from_slice(&probe.stdout).unwrap();
+        let streams = result["streams"].as_array().unwrap();
+        assert_eq!(streams.iter().filter(|s| s["disposition"]["attached_pic"] == 1).count(),
+            if mode == "audio" { 1 } else { 0 }, "{mode}-{container}: {result}");
+        assert_eq!(streams.iter().filter(|s| s["codec_type"] == "audio").count(), 1);
+        assert!(std::fs::read_dir(&directory).unwrap().all(|entry| {
+            let path = entry.unwrap().path();
+            path.is_dir() || path.to_string_lossy() == file
+        }), "album art must be embedded without a separate image file");
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires the local fixture server; run npm run test:engine"]
 async fn real_playlist_expands_and_downloads_all_entries_as_mp3() {
     use streamdrop_core::{queue::Queue, store::Store};
     let base = std::env::var("STREAMDROP_FIXTURE_URL").unwrap();
@@ -69,18 +103,19 @@ async fn real_playlist_expands_and_downloads_all_entries_as_mp3() {
 #[ignore = "requires the local fixture server; run npm run test:engine"]
 async fn real_mp4_hls_audio_and_video_only_downloads() {
     let base = std::env::var("STREAMDROP_FIXTURE_URL").unwrap();
-    let output = PathBuf::from(std::env::var("STREAMDROP_FIXTURE_OUTPUT").unwrap());
+    let temporary = tempfile::tempdir().unwrap();
+    let output = temporary.path();
     let engine = Engine {
         directory: PathBuf::from(std::env::var("STREAMDROP_ENGINE_DIR").unwrap()),
     };
     let (_sender, cancel) = watch::channel(false);
     let mut original_file = None;
-    for (mode, container, source) in [
-        ("both", "mp4", "sample.webm"),
-        ("audio", "mp3", "sample.mp4"),
-        ("video", "mp4", "sample.webm"),
-        ("both", "original", "sample.mp4"),
-        ("video", "original", "sample.mp4"),
+    for (mode, container, source, expected_name) in [
+        ("both", "mp4", "sample.webm", "sample.mp4"),
+        ("audio", "mp3", "sample.mp4", "sample.mp3"),
+        ("video", "mp4", "sample.webm", "sample (2).mp4"),
+        ("both", "original", "sample.mp4", "sample (3).mp4"),
+        ("video", "original", "sample.mp4", "sample (4).mp4"),
     ] {
         let input = Input::parse(json!(format!("{base}/{source}"))).unwrap();
         let info = engine.analyze(input.clone(), cancel.clone()).await.unwrap();
@@ -104,6 +139,7 @@ async fn real_mp4_hls_audio_and_video_only_downloads() {
             )
             .await
             .unwrap();
+        assert_eq!(std::path::Path::new(&file).file_name().unwrap(), expected_name);
         if container == "mp4" {
             assert_eq!(std::path::Path::new(&file).extension().unwrap(), "mp4");
         }

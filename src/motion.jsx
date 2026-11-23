@@ -148,7 +148,7 @@ export function MediaSegments({options,onChange,disabled}){return <VStack gap={2
   </SegmentedControl>
 </VStack>;}
 
-function stage(item){
+export function downloadStage(item){
   if(item.status==='completed')return 4;
   if(item.status==='processing')return 2;
   if(item.status==='analyzing')return 0;
@@ -157,12 +157,9 @@ function stage(item){
   return item.info?1:0;
 }
 
-export function DownloadSteps({item}){
-  const observed=useRef(new Map()),interrupted=['failed','cancelled','paused'].includes(item.status);
-  const current=interrupted?(observed.current.get(item.id)??stage(item)):stage(item);
-  useLayoutEffect(()=>{
-    if(!interrupted)observed.current.set(item.id,current);
-  },[item.id,interrupted,current]);
+export function DownloadSteps({item,history}){
+  const interrupted=['failed','cancelled','paused'].includes(item.status);
+  const current=interrupted?(history.get(item.id)??downloadStage(item)):downloadStage(item);
   return <VStack data-motion="steps" gap={2}>
     <Stack width="calc(100% + 2 * var(--spacing-5))" style={{alignSelf:'center'}}>
     <Stepper label="다운로드 단계" activeStep={current} indicatorPosition="on-track" density="compact" horizontalOptions={{minimumStepWidth:60,collapsedVariant:'withLabel'}}>

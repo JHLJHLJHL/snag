@@ -165,12 +165,7 @@ pub fn download_args(item: &Item, directory: &std::path::Path) -> Result<Vec<Str
     args.push(directory.to_string_lossy().into());
     args.extend([
         "--output".into(),
-        format!(
-            "%(title).110B [%(id)s] {}-{}-{}.%(ext)s",
-            o.mode,
-            &job_key(item)[..8.min(job_key(item).len())],
-            options_key(item)
-        ),
+        "%(title).110B.%(ext)s".into(),
         "--format".into(),
     ]);
     args.push(
@@ -196,6 +191,9 @@ pub fn download_args(item: &Item, directory: &std::path::Path) -> Result<Vec<Str
         args.extend(
             [
                 "--extract-audio",
+                "--embed-thumbnail",
+                "--convert-thumbnails",
+                "jpg",
                 "--audio-format",
                 if o.container == "mp3" { "mp3" } else { "best" },
             ]

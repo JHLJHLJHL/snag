@@ -45,6 +45,7 @@ try{
   assert.equal(await page.getByRole('alert').count(),0);
   await page.screenshot({path:path.join(root,'desktop-empty.png')});
   assert.equal((await call('status')).engineReady,true);
+  if(process.env.STREAMDROP_EXPECT_ENGINE_MARKER)assert.equal((await call('status')).versions.distributionTestMarker,process.env.STREAMDROP_EXPECT_ENGINE_MARKER,'uses the extracted distribution engine');
   if(process.env.STREAMDROP_BUNDLED_TEST)assert.equal(path.resolve((await call('status')).extensionPath),path.join(path.dirname(executable),'extension'));
   // Real native frames and authenticated loopback server, without modifying Chrome registration.
   const status=await native({action:'status'});assert.equal(status.ok,true);

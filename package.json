@@ -16,6 +16,8 @@
     "test:engine": "node scripts/engine-smoke.mjs",
     "setup:engine": "node scripts/setup-engine.mjs",
     "package": "node scripts/package.mjs",
+    "distribute": "node scripts/distribute.mjs",
+    "test:distribution": "node scripts/verify-distribution.mjs",
     "test:extension": "node scripts/extension-smoke.mjs"
   },
   "dependencies": {

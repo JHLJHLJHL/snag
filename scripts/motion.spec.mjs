@@ -41,6 +41,9 @@ test.beforeEach(async({page})=>{
           for(const item of queue.items.filter(item=>payload.ids.includes(item.id)))item.status='queued';
           window.__setQueue([...queue.items]);return {count:payload.ids.length};
         }
+        if(action==='retry'){
+          window.__setQueue(queue.items.map(item=>item.id===payload.id?{...item,status:'analyzing',error:null,progress:{percent:0}}:item));return null;
+        }
         if(action==='removeSelected'){
           window.__setQueue(queue.items.filter(item=>!payload.ids.includes(item.id)));return {count:payload.ids.length};
         }
@@ -67,6 +70,39 @@ async function status(page,state,percent=0){
     window.__setQueue([{...item,status:state,progress:{percent}}]);
   },{state,percent});
 }
+
+test('results leave the queue and appear only in their matching library',async({page})=>{
+  await page.goto('/');
+  await page.evaluate(()=>{
+    const item=window.__getQueue().items[0];
+    window.__setQueue([item,{...item,id:'failed',title:'실패한 영상',status:'failed'},
+      {...item,id:'cancelled',title:'취소한 영상',status:'cancelled'},
+      {...item,id:'done',title:'완료한 영상',status:'completed'}]);
+  });
+  const list=page.locator('[data-region="download-list"]');
+  await expect(list.getByText('테스트 영상',{exact:true})).toBeVisible();
+  for(const title of ['실패한 영상','취소한 영상','완료한 영상'])await expect(list.getByText(title,{exact:true})).toHaveCount(0);
+  await page.getByRole('checkbox',{name:'테스트 영상 선택',exact:true}).check();
+  await status(page,'failed');
+  await expect(list.getByText('테스트 영상',{exact:true})).toHaveCount(0);
+  await expect(page.getByRole('complementary').getByText('테스트 영상',{exact:true})).toHaveCount(0);
+  await page.getByRole('button',{name:'실패 · 취소',exact:false}).click();
+  await expect(list.getByText('테스트 영상',{exact:true})).toBeVisible();
+  await list.getByRole('button',{name:'다시 시도',exact:true}).click();
+  await expect(list.getByText('테스트 영상',{exact:true})).toHaveCount(0);
+  await page.getByRole('button',{name:'다운로드 대기열',exact:false}).click();
+  await expect(list.getByText('테스트 영상',{exact:true})).toBeVisible();
+  await expect(page.getByText('0개 선택',{exact:true})).toBeVisible();
+  await status(page,'completed',100);
+  await expect(list.getByText('테스트 영상',{exact:true})).toHaveCount(0);
+  await expect(page.getByRole('complementary').getByText('테스트 영상',{exact:true})).toHaveCount(0);
+  await page.getByRole('button',{name:'실패 · 취소',exact:false}).click();
+  await expect(list.getByText('테스트 영상',{exact:true})).toHaveCount(0);
+  await page.getByRole('button',{name:'완료한 다운로드',exact:false}).click();
+  await expect(list.getByText('테스트 영상',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'다운로드 대기열',exact:false}).click();
+  await expect(list.getByText('테스트 영상',{exact:true})).toHaveCount(0);
+});
 
 test('queue media buttons only configure selection and panel button starts downloads',async({page})=>{
   await page.goto('/');
@@ -386,8 +422,9 @@ test('a retry failing in analysis does not reuse the previous 100% processing ph
   await expect(steps).toBeVisible();
   await status(page,'processing',100);
   await status(page,'failed',100);
-  await status(page,'analyzing',100);
-  await expect(page.locator('[data-motion="job-status"]').first()).toHaveAttribute('data-state','analyzing');
+  await page.getByRole('button',{name:'실패 · 취소',exact:false}).click();
+  await page.getByRole('button',{name:'다시 시도',exact:true}).click();
+  await expect(steps).toHaveCount(0);
   await status(page,'failed',100);
   await expect(steps.locator('.astryx-step[data-progress="completed"]')).toHaveCount(0);
   await expect(steps.locator('.astryx-step').first()).toHaveAttribute('data-status','error');
@@ -401,6 +438,7 @@ test('reduced motion keeps feedback and small desktop controls fit',async({page}
   const steps=page.getByRole('list',{name:'다운로드 단계',exact:true});
   await expect(steps).toBeVisible();
   await status(page,'failed',50);
+  await page.getByRole('button',{name:'실패 · 취소',exact:false}).click();
   await expect(page.locator('[data-motion="job-status"]').first()).toHaveAttribute('data-state','failed');
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   expect(await page.evaluate(()=>document.getAnimations().filter(a=>a.playState==='running'&&a.effect?.getKeyframes().some(k=>k.transform&&k.transform!=='none')).length)).toBe(0);

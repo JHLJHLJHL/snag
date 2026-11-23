@@ -17,13 +17,14 @@ import {List,ListItem} from '@astryxdesign/core/List';
 import {Divider} from '@astryxdesign/core/Divider';
 import {ArrowDownTrayIcon,ArrowUpTrayIcon,ArrowUpIcon,ArrowDownIcon,PlayIcon,PauseIcon,XMarkIcon,ArrowPathIcon,CheckCircleIcon,QueueListIcon,FolderIcon,Cog6ToothIcon,PuzzlePieceIcon,LinkIcon,WindowIcon,FilmIcon,MusicalNoteIcon,ArrowTopRightOnSquareIcon,TrashIcon} from '@heroicons/react/24/outline';
 import {command,subscribe,subscribePlaylist,draggedInput,bytes,duration} from './api';
-import {MotionStyles,MediaSegments,JobStatus,DownloadSteps,DownloadProgress,CopyButton,DropFeedback,DropIsland,acceptsLink,jobLabels as labels} from './motion';
+import {MotionStyles,MediaSegments,JobStatus,DownloadSteps,DownloadProgress,CopyButton,DropFeedback,DropIsland,acceptsLink,downloadStage,jobLabels as labels} from './motion';
 
 const presets=[{value:'best',label:'원본 최고 화질'},{value:'1080',label:'최대 1080p'},{value:'720',label:'최대 720p'},{value:'480',label:'최대 480p'}];
 const containers=[{value:'mp4',label:'MP4로 저장'},{value:'original',label:'원본 유지'},{value:'mp3',label:'MP3로 저장'}];
 const audioQualities=[{value:'best',label:'최고 음질'},{value:'320',label:'320 kbps'},{value:'256',label:'256 kbps'},{value:'192',label:'192 kbps'},{value:'128',label:'128 kbps'},{value:'96',label:'96 kbps'}];
 const busy=item=>['analyzing','queued','downloading','processing'].includes(item?.status);
-const queueSelectable=item=>!['completed','downloading','processing'].includes(item.status);
+const inQueue=item=>!['completed','failed','cancelled'].includes(item.status);
+const queueSelectable=item=>inQueue(item)&&!['downloading','processing'].includes(item.status);
 
 function Brand(){return <HStack gap={3} vAlign="center"><Stack width="var(--spacing-10)" height="var(--spacing-10)"><img src="/snag-character.png" alt="" style={{width:'100%',height:'100%',objectFit:'contain'}}/></Stack><VStack gap={0}><Text type="brand" weight="bold">SNAG</Text></VStack></HStack>;}
 function formatLabel(f){return f.video?`${f.height?`${f.height}p`:'원본'}${f.fps?` · ${Math.round(f.fps)}fps`:''} · ${f.ext.toUpperCase()}${f.audio?' · 음성 포함':''}`:`${f.language?`${f.language.toUpperCase()} · `:''}${f.abr?`${Math.round(f.abr)} kbps · `:''}${f.ext.toUpperCase()}${f.note?` · ${f.note}`:''}`;}
@@ -66,6 +67,13 @@ export default function App(){
   const [copied,setCopied]=useState(false);
   const timer=useRef(null);
   const copyTimer=useRef(null);
+  const stepHistory=useRef(new Map());
+  const receiveState=useCallback(value=>{
+    const ids=new Set(value.items.map(row=>row.id));
+    for(const id of stepHistory.current.keys())if(!ids.has(id))stepHistory.current.delete(id);
+    for(const row of value.items)if(!['failed','cancelled','paused'].includes(row.status))stepHistory.current.set(row.id,downloadStage(row));
+    setState(value);
+  },[]);
   const dropWindow=new URLSearchParams(location.search).get('window')==='drop';
   const flash=useCallback((text,error=false,timeout=error?10000:5000)=>{setMessage({text,error});clearTimeout(timer.current);timer.current=setTimeout(()=>setMessage(null),timeout);},[]);
   const copyEmail=useCallback(async()=>{
@@ -140,22 +148,22 @@ export default function App(){
   },[flash]);
   useEffect(()=>{
     let disposed=false,unlisten;
-    subscribe(value=>{if(!disposed)setState(value);}).then(fn=>{if(disposed)fn();else unlisten=fn;}).catch(error=>flash(String(error),true));
-    command('snapshot').then(value=>{if(!disposed)setState(value);}).catch(error=>flash(`앱 연결 오류: ${error}`,true));refresh();
+    subscribe(value=>{if(!disposed)receiveState(value);}).then(fn=>{if(disposed)fn();else unlisten=fn;}).catch(error=>flash(String(error),true));
+    command('snapshot').then(value=>{if(!disposed)receiveState(value);}).catch(error=>flash(`앱 연결 오류: ${error}`,true));refresh();
     const keyboard=e=>{if((e.ctrlKey||e.metaKey)&&e.key==='l'){e.preventDefault();document.querySelector('input[aria-label="영상 주소"]')?.focus();}};
     window.addEventListener('keydown',keyboard);
     return()=>{disposed=true;unlisten?.();clearTimeout(timer.current);window.removeEventListener('keydown',keyboard);};
-  },[refresh,flash]);
+  },[refresh,flash,receiveState]);
   const add=useCallback(async raw=>{
     setAdding(true);setAddResult(null);try{const result=await command('add',raw);setSelected(result.id);if(!dropWindow)setView('queue');flash(result.duplicate?'이미 대기열에 추가된 주소입니다.':'주소를 확인하고 있습니다. 재생목록은 포함된 영상을 순서대로 추가합니다.');setAddResult({state:result.duplicate?'duplicate':'success'});setUrl('');}catch(error){flash(String(error),true);setAddResult({state:'failed'});}finally{setAdding(false);}
   },[dropWindow,flash]);
   const onDrop=async e=>{e.preventDefault();setOver(false);if(!acceptsLink(e.dataTransfer)){flash('영상 파일 대신 크롬의 영상 링크를 끌어다 놓아 주세요.',true);return;}try{await add(draggedInput(e.dataTransfer));}catch(error){flash(error.message,true);setAddResult({state:'failed'});}};
-  const filtered=useMemo(()=>state.items.filter(item=>view==='completed'?item.status==='completed':view==='failed'?['failed','cancelled'].includes(item.status):item.status!=='completed'),[state.items,view]);
-  const item=state.items.find(i=>i.id===selected)||filtered[0];
+  const filtered=useMemo(()=>state.items.filter(item=>view==='completed'?item.status==='completed':view==='failed'?['failed','cancelled'].includes(item.status):inQueue(item)),[state.items,view]);
+  const item=filtered.find(i=>i.id===selected)||filtered[0];
   const sendIds=state.items.filter(row=>row.status==='completed'&&checkedIds.includes(row.id)).map(row=>row.id);
   const selectableQueue=filtered.filter(queueSelectable);
   const queueIds=selectableQueue.filter(row=>queueCheckedIds.includes(row.id)).map(row=>row.id);
-  const pending=state.items.filter(i=>i.status!=='completed').length,completed=state.items.filter(i=>i.status==='completed').length,failed=state.items.filter(i=>i.status==='failed').length;
+  const pending=state.items.filter(inQueue).length,completed=state.items.filter(i=>i.status==='completed').length,failed=state.items.filter(i=>['failed','cancelled'].includes(i.status)).length;
   const active=state.items.find(i=>['downloading','processing'].includes(i.status));
   const dropProps={'data-motion':'drop-target',onDragOver:e=>{e.preventDefault();const accepts=acceptsLink(e.dataTransfer);e.dataTransfer.dropEffect=accepts?'copy':'none';setOver(accepts);},onDragLeave:e=>{if(!e.relatedTarget||!(e.relatedTarget instanceof Node)||!e.currentTarget.contains(e.relatedTarget))setOver(false);},onDrop};
   if(dropWindow)return <><MotionStyles/><DropIsland items={state.items} over={over} adding={adding} result={addResult} message={message} dropProps={dropProps} onOpen={()=>run('showMain')}/></>;
@@ -189,7 +197,7 @@ export default function App(){
             />)}</List>}</Stack>
           </>}
         </VStack></LayoutContent>}
-        end={!['connection','settings'].includes(view)&&<LayoutPanel width="var(--snag-settings-width)" padding={6} hasDivider label="영상 품질 설정" role="complementary"><VStack gap={4}><HStack gap={2}><Icon icon={Cog6ToothIcon}/><Heading level={2} type="section-title">다운로드 설정</Heading></HStack>{item?<><VStack gap={2}><Text weight="semibold" maxLines={2}>{item.title}</Text><JobStatus status={item.status}/></VStack><DownloadSteps item={item}/><Quality options={item.options} formats={item.info?.formats||[]} disabled={['analyzing','queued','downloading','processing','completed'].includes(item.status)} onChange={options=>run('update',{id:item.id,options})}/><Divider/><HStack gap={2} vAlign="center"><Button label="순서 위로" isIconOnly icon={<Icon icon={ArrowUpIcon} style={{width:'var(--snag-icon-size-reorder)',height:'var(--snag-icon-size-reorder)'}}/>} onClick={()=>run('reorder',{id:item.id,direction:-1})}/><Button label="순서 아래로" isIconOnly icon={<Icon icon={ArrowDownIcon} style={{width:'var(--snag-icon-size-reorder)',height:'var(--snag-icon-size-reorder)'}}/>} onClick={()=>run('reorder',{id:item.id,direction:1})}/><Text type="supporting">대기열 순서</Text></HStack>{view==='queue'&&queueIds.length>0?<Button label={`선택한 ${queueIds.length}개 다운로드`} variant="primary" icon={<Icon icon={ArrowDownTrayIcon}/>} isLoading={batchAction==='start'} isDisabled={!!batchAction||status.engineReady===false} onClick={()=>downloadSelection(queueIds)}/>:item.status==='completed'?<Button label="저장한 파일 보기" icon={<Icon icon={FolderIcon}/>} onClick={()=>run('reveal',{id:item.id})}/>:<Button label={busy(item)?'작업 취소':'이 영상 다운로드'} variant={busy(item)?'secondary':'primary'} icon={<Icon icon={busy(item)?XMarkIcon:ArrowDownTrayIcon}/>} onClick={()=>run(busy(item)?'cancel':['failed','cancelled'].includes(item.status)?'retry':'start',{id:item.id})}/>}</>:<><Quality options={state.settings} onChange={patch=>run('settings',patch)}/></>}</VStack></LayoutPanel>}
+        end={!['connection','settings'].includes(view)&&<LayoutPanel width="var(--snag-settings-width)" padding={6} hasDivider label="영상 품질 설정" role="complementary"><VStack gap={4}><HStack gap={2}><Icon icon={Cog6ToothIcon}/><Heading level={2} type="section-title">다운로드 설정</Heading></HStack>{item?<><VStack gap={2}><Text weight="semibold" maxLines={2}>{item.title}</Text><JobStatus status={item.status}/></VStack><DownloadSteps item={item} history={stepHistory.current}/><Quality options={item.options} formats={item.info?.formats||[]} disabled={['analyzing','queued','downloading','processing','completed'].includes(item.status)} onChange={options=>run('update',{id:item.id,options})}/><Divider/><HStack gap={2} vAlign="center"><Button label="순서 위로" isIconOnly icon={<Icon icon={ArrowUpIcon} style={{width:'var(--snag-icon-size-reorder)',height:'var(--snag-icon-size-reorder)'}}/>} onClick={()=>run('reorder',{id:item.id,direction:-1})}/><Button label="순서 아래로" isIconOnly icon={<Icon icon={ArrowDownIcon} style={{width:'var(--snag-icon-size-reorder)',height:'var(--snag-icon-size-reorder)'}}/>} onClick={()=>run('reorder',{id:item.id,direction:1})}/><Text type="supporting">대기열 순서</Text></HStack>{view==='queue'&&queueIds.length>0?<Button label={`선택한 ${queueIds.length}개 다운로드`} variant="primary" icon={<Icon icon={ArrowDownTrayIcon}/>} isLoading={batchAction==='start'} isDisabled={!!batchAction||status.engineReady===false} onClick={()=>downloadSelection(queueIds)}/>:item.status==='completed'?<Button label="저장한 파일 보기" icon={<Icon icon={FolderIcon}/>} onClick={()=>run('reveal',{id:item.id})}/>:<Button label={busy(item)?'작업 취소':'이 영상 다운로드'} variant={busy(item)?'secondary':'primary'} icon={<Icon icon={busy(item)?XMarkIcon:ArrowDownTrayIcon}/>} onClick={()=>run(busy(item)?'cancel':['failed','cancelled'].includes(item.status)?'retry':'start',{id:item.id})}/>}</>:<><Quality options={state.settings} onChange={patch=>run('settings',patch)}/></>}</VStack></LayoutPanel>}
         footer={<LayoutFooter padding={4}><HStack hAlign="between" vAlign="center" gap={4}><HStack gap={2} vAlign="center" style={{minWidth:0}}><Icon icon={FolderIcon} size="sm"/><Text type="supporting" maxLines={1}>{state.settings.directory}</Text><Button label="저장 폴더 변경" size="sm" variant="ghost" onClick={()=>run('pickDirectory')}><Text type="section-title">저장 폴더 변경</Text></Button></HStack><Text type="supporting">{active?labels[active.status]:'준비됨'} · 완료 {completed}개</Text></HStack></LayoutFooter>}/>
     </AppShell>
   </Stack>;
